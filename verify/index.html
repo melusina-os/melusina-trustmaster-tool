@@ -791,7 +791,13 @@ async function run() {
         // Require TLS cert fields
         var certFP = (el('certFPInput').value || '').trim().replace(/[:\s]/g, '').toLowerCase();
         var certPKInput = (el('certPKInput').value || '').trim();
-        if (!certFP || certFP.length < 32) return alert('Certificate SHA-256 fingerprint is required.\n\nClick the lock icon in your browser\'s address bar → Certificate → Details → SHA-256 Fingerprint');
+        if (!certFP) return alert('Certificate SHA-256 fingerprint is required.\n\nClick the lock icon in your browser\'s address bar → Certificate → Details → SHA-256 Fingerprint');
+        // Reject SHA-1 input (40 hex chars) — DNS publishes SHA-256 (64 hex chars).
+        // Without this check a SHA-1 paste would be compared char-for-char against
+        // a SHA-256 hash and trigger a false-positive "MITM detected" alert.
+        if (!/^[0-9a-f]+$/.test(certFP)) return alert('Certificate fingerprint must be hex characters only (0-9, a-f).\n\nGot: ' + certFP.substring(0, 16) + '...');
+        if (certFP.length === 40) return alert('That looks like a SHA-1 fingerprint (40 hex chars).\n\nTrustMaster requires the SHA-256 fingerprint (64 hex chars).\n\nIn the same Certificate Details panel, scroll down past the SHA-1 row to find the SHA-256 row and paste THAT value instead.');
+        if (certFP.length !== 64) return alert('Certificate SHA-256 fingerprint must be exactly 64 hex characters.\n\nGot ' + certFP.length + ' characters. Click the lock icon → Certificate → Details → Fingerprints → SHA-256 and copy that row.');
         if (!certPKInput || certPKInput.length < 16) return alert('Certificate Public Key is required.\n\nClick the lock icon in your browser\'s address bar → Certificate → Details → Public Key');
 
         pastedClaims = parseDNA(raw);
