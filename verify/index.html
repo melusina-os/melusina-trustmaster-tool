@@ -1429,6 +1429,11 @@ async function run() {
                     verdict = 'warn';
                 } else if (!cl && vr) {
                     verdict = optional ? 'na' : 'warn';
+                } else {
+                    // !cl && !vr — both missing. Optional fields stay 'na';
+                    // non-optional fields warn so missing data is visible to
+                    // the operator instead of silently passing as not-applicable.
+                    verdict = optional ? 'na' : 'warn';
                 }
                 crossRows.push({ field: field, claimed: cl, verified: vr, verdict: verdict });
             }
