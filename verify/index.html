@@ -127,55 +127,6 @@
         .check-detail { font-size: 0.82rem; color: var(--muted); margin-top: 6px; }
         .check-detail code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 0.78rem; }
 
-        /* §2.14 reduced-mode banner — KISS. Same amber palette as the
-           Sandstorm shell helix tint so the carve-out reads as one visual
-           language across the surfaces. */
-        .reduced-mode-banner {
-            display: flex;
-            align-items: flex-start;
-            gap: 12px;
-            background: linear-gradient(135deg, #fffbeb, #fef3c7);
-            border: 1px solid #f5a623;
-            border-left-width: 5px;
-            border-radius: 10px;
-            padding: 14px 16px;
-            color: #78350f;
-            font-size: 0.92rem;
-            line-height: 1.5;
-        }
-        .reduced-mode-banner .reduced-mode-icon {
-            font-size: 1.4rem; color: #d97706; flex-shrink: 0; line-height: 1;
-        }
-        .reduced-mode-banner .reduced-mode-text {
-            flex: 1; min-width: 0;
-        }
-        .reduced-mode-banner .reduced-mode-text strong { color: #92400e; }
-        .reduced-mode-banner .reduced-mode-text code {
-            background: rgba(146, 64, 14, 0.1);
-            color: #92400e;
-            padding: 1px 6px;
-            border-radius: 4px;
-            font-family: monospace; font-size: 0.85em;
-            word-break: break-word;
-            overflow-wrap: anywhere;
-        }
-        .reduced-mode-banner .reduced-mode-text a {
-            color: #b45309; text-decoration: underline; font-size: 0.85em;
-        }
-        /* Header pill on L3 (Licensee) when reduced mode is on */
-        .reduced-mode-pill {
-            margin-left: auto;
-            padding: 2px 10px;
-            border-radius: 999px;
-            background: rgba(245, 166, 35, 0.18);
-            border: 1px solid #f5a623;
-            color: #92400e;
-            font-size: 0.7rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
         /* TLS manual check box */
         .tls-check-box { background: linear-gradient(135deg, #eff6ff, #dbeafe); border: 2px solid #3b82f6; border-radius: 12px; padding: 18px; margin: 14px 0; }
         .tls-check-box h4 { color: #1d4ed8; margin-bottom: 10px; }
@@ -356,28 +307,11 @@ dns_tls_fp:        da07c332...
             </div>
         </div>
 
-        <!-- §2.14 reduced-mode banner — KISS one-liner. Operators wanting
-             the full carve-out scope read CLAUDE.md §2.14; the banner just
-             flags the bit. -->
-        <div class="card" id="reducedModeCard" style="display:none;">
-            <div class="reduced-mode-banner">
-                <span class="reduced-mode-icon">&#9888;</span>
-                <span class="reduced-mode-text">
-                    <strong>Reduced security mode</strong> &mdash;
-                    <code>spk dev</code> and <code>sandstorm dev-shell</code> bypass the
-                    cascade gate on this install. Devnet only.
-                    <a href="https://github.com/melusina-os/melusina-os-sandstorm/blob/main/CLAUDE.md#214"
-                       target="_blank" rel="noopener noreferrer">CLAUDE.md &sect;2.14</a>
-                </span>
-            </div>
-        </div>
-
         <!-- Layer results -->
         <div class="card">
             <div class="layer l3">
                 <div class="layer-hdr">
                     <span class="lbadge">L3</span> &#x1f4dc; Licensee
-                    <span id="l3-reduced-mode-pill" class="reduced-mode-pill" style="display:none;" title="dev_permissive=true on this install">&#9888; reduced</span>
                 </div>
                 <div id="l3checks"></div>
             </div>
@@ -803,22 +737,29 @@ async function getLicenseEntry(licenseMint) {
     var owner = base58Encode(bytes.slice(off, off + 32)); off += 32;
     var custodyMode = bytes[off++];
 
-    // CLAUDE.md §2.14 — `dev_permissive: bool` is the second-to-last byte
-    // of LicenseEntry (just before the trailing `bump: u8`). Reading from
-    // the tail dodges the variable-length middle (squads vault opt +
-    // status + timestamps + counters + authz_identity_pubkey).
-    //
-    // Backward-compat: a pre-§2.14 LicenseEntry account is one byte shorter
-    // (no dev_permissive field), so `bytes[len-2]` would land on whatever
-    // was previously the last byte before bump (typically a status, signer
-    // count, etc.) — could be ANY value 0..255. To avoid falsely
-    // reporting "reduced mode" on legacy accounts, treat anything that
-    // isn't a strict 0 or 1 as "unknown / legacy layout" and surface as
-    // null. The UI hides the banner + pill on null, same as on false.
-    var devPermByte = bytes[bytes.length - 2];
-    var devPermissive = (devPermByte === 0 || devPermByte === 1)
-        ? Boolean(devPermByte)
-        : null;
+    // Retired dev-permissive bit. LicenseEntry keeps its byte as the reserved
+    // `reserved_was_dev_permissive` (u8, always 0) directly after
+    // authz_identity_pubkey: every program writer stores 0 and
+    // set_dev_permissive refuses every call. Decode the fixed-order fields up
+    // to it (squads vault / multisig options, status, activated_at,
+    // revoked_at option, share and signer counters, authz identity). A
+    // non-zero byte is a violation, never a relaxation; a layout this page
+    // cannot walk to the byte is unverifiable (null) and also fails.
+    var reservedWasDevPermissive = null;
+    (function () {
+        var o = off;
+        function opt(n) {
+            if (o >= bytes.length) return false;
+            var tag = bytes[o++];
+            if (tag === 1) { o += n; return true; }
+            return tag === 0;
+        }
+        if (!opt(32) || !opt(32)) return;   // squads_vault, squads_multisig
+        o += 1 + 8;                          // status, activated_at
+        if (!opt(8)) return;                 // revoked_at
+        o += 4 + 4 + 1 + 1 + 32;             // shares, signers, authz_identity_pubkey
+        if (o < bytes.length) reservedWasDevPermissive = bytes[o];
+    })();
 
     return {
         pda: entry.pubkey,
@@ -833,9 +774,9 @@ async function getLicenseEntry(licenseMint) {
         activeKeyholders: activeKeyholders,
         owner: owner,
         custodyMode: custodyMode,
-        // §2.14 — true when this install opted into the dev-permissive
-        // carve-out (Squads-signed set_dev_permissive(true), devnet-only).
-        devPermissive: devPermissive,
+        // Reserved byte (retired dev-permissive bit): 0, a set value, or null
+        // when the layout could not be decoded up to it.
+        reservedWasDevPermissive: reservedWasDevPermissive,
     };
 }
 
@@ -1568,43 +1509,25 @@ async function run() {
                     : 'On-chain license binds <code>' + esc(licenseEntry.domain || '(blank)') + '</code> instead of <code>' + esc(domain) + '</code>',
             });
 
-            // CLAUDE.md §2.14 — surface the dev-permissive carve-out as a
-            // discrete check so the operator sees it as part of the licence
-            // narrative AND we toggle the page-level banner / L3 header pill.
-            // devPermissive is null for pre-§2.14 layouts (legacy accounts)
-            // — surface as a "skip" check rather than a warning so a stale
-            // account in trustmaster's view doesn't read as a security
-            // regression.
-            if (licenseEntry.devPermissive === null) {
-                l3.push({
-                    name: 'Reduced security mode (dev_permissive)',
-                    s: 'skip',
-                    detail: 'Legacy LicenseEntry layout (pre-CLAUDE.md §2.14) &mdash; the ' +
-                            '<code>dev_permissive</code> bit is absent from this account. ' +
-                            'Re-mint with the current program build to read the carve-out state.',
-                });
-            } else {
-                l3.push({
-                    name: 'Reduced security mode (dev_permissive)',
-                    s: licenseEntry.devPermissive ? 'warn' : 'pass',
-                    detail: licenseEntry.devPermissive
-                        ? 'On-chain <code>LicenseEntry.dev_permissive = true</code> &mdash; ' +
-                          '<strong>Reduced security mode active</strong>. spk dev / sandstorm dev-shell ' +
-                          'bypass the cascade gate; admin reconcile retains admin on transient ' +
-                          'authz-daemon errors. Production grain launches still run the full verify chain. ' +
-                          'See banner above for full scope.'
-                        : 'On-chain <code>LicenseEntry.dev_permissive = false</code> &mdash; ' +
-                          'production-mode (cascade gate enforced for every grain launch).',
-                });
-            }
-            // Banner + header pill driven by the same source of truth.
-            // Show only when the bit is unambiguously true; null and false
-            // both keep the surface hidden.
-            var redCard = document.getElementById('reducedModeCard');
-            var redPill = document.getElementById('l3-reduced-mode-pill');
-            var showRed = licenseEntry.devPermissive === true;
-            if (redCard) redCard.style.display = showRed ? '' : 'none';
-            if (redPill) redPill.style.display = showRed ? '' : 'none';
+            // Retired dev-permissive bit: the reserved byte must be 0. A set
+            // byte is a violation (the licence was written under the retired
+            // carve-out and every full-security component refuses it). A layout
+            // this page cannot decode up to the byte cannot be verified and
+            // fails as well. There is no reduced or relaxed mode to report.
+            var reservedByte = licenseEntry.reservedWasDevPermissive;
+            l3.push({
+                name: 'Reserved licence byte (retired dev-permissive bit)',
+                s: reservedByte === 0 ? 'pass' : 'fail',
+                detail: reservedByte === 0
+                    ? 'On-chain <code>LicenseEntry.reserved_was_dev_permissive = 0</code> &mdash; ' +
+                      'the approval cascade runs for every grain launch'
+                    : reservedByte === null
+                        ? 'Could not decode the on-chain LicenseEntry up to its reserved byte &mdash; ' +
+                          'the licence cannot be verified'
+                        : '<strong>Violation</strong>: on-chain <code>LicenseEntry.reserved_was_dev_permissive = ' +
+                          esc(String(reservedByte)) + '</code>. The retired dev-permissive bit is set; ' +
+                          'full-security components refuse this licence. Re-issue it under the current program.',
+            });
         } else if (licenseMint && licenseMint !== 'pending') {
             l3.push({ name: 'License entry domain binding', s: 'warn', detail: 'Could not decode the on-chain license entry for this mint' });
         }
